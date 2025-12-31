@@ -9,19 +9,191 @@ Vercel Python serverless function that:
 """
 
 import os
-import sys
 import re
 import json
 from io import BytesIO
 from http.server import BaseHTTPRequestHandler
 
-# Add parent directory to path for lib imports
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
 import anthropic
 from PyPDF2 import PdfReader
-from lib.pdf_generator import generate_pdf_resume
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+from reportlab.lib.units import inch
+from reportlab.lib.colors import black
+from reportlab.lib.enums import TA_CENTER
+from reportlab.platypus import (
+    SimpleDocTemplate, Paragraph, Spacer, HRFlowable,
+    Table, TableStyle
+)
 
+
+# ============== PDF GENERATION FUNCTIONS ==============
+
+def process_bold_markers(text: str) -> str:
+    """Convert **bold** markers to ReportLab XML tags."""
+    if not text:
+        return ""
+    text = text.replace('&', '&amp;')
+    text = text.replace('<', '&lt;')
+    text = text.replace('>', '&gt;')
+    return re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', text)
+
+
+def create_styles():
+    """Create paragraph styles for the resume."""
+    styles = getSampleStyleSheet()
+
+    name_style = ParagraphStyle(
+        'ResumeName', parent=styles['Heading1'], fontSize=16,
+        alignment=TA_CENTER, spaceAfter=4, textColor=black, fontName='Helvetica-Bold'
+    )
+    contact_style = ParagraphStyle(
+        'ResumeContact', parent=styles['Normal'], fontSize=9,
+        alignment=TA_CENTER, spaceAfter=12, textColor=black, fontName='Helvetica'
+    )
+    section_style = ParagraphStyle(
+        'ResumeSection', parent=styles['Heading2'], fontSize=11,
+        spaceBefore=10, spaceAfter=4, textColor=black, fontName='Helvetica-Bold'
+    )
+    bullet_style = ParagraphStyle(
+        'ResumeBullet', parent=styles['Normal'], fontSize=9,
+        spaceBefore=1, spaceAfter=1, leftIndent=15, textColor=black, fontName='Helvetica'
+    )
+    normal_style = ParagraphStyle(
+        'ResumeNormal', parent=styles['Normal'], fontSize=9,
+        spaceBefore=0, spaceAfter=2, textColor=black, fontName='Helvetica'
+    )
+    return {
+        'name': name_style, 'contact': contact_style, 'section': section_style,
+        'bullet': bullet_style, 'normal': normal_style
+    }
+
+
+def generate_pdf_resume(resume_data: dict, company_name: str, job_title: str) -> bytes:
+    """Generate a professional PDF resume using ReportLab."""
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=A4, leftMargin=0.5*inch,
+                           rightMargin=0.5*inch, topMargin=0.5*inch, bottomMargin=0.5*inch)
+    styles = create_styles()
+    elements = []
+
+    # Header
+    name = resume_data.get('name', 'Your Name')
+    elements.append(Paragraph(name, styles['name']))
+
+    # Contact line
+    contact = resume_data.get('contact', {})
+    contact_parts = []
+    if contact.get('email'):
+        contact_parts.append(f'<a href="mailto:{contact["email"]}" color="blue">{contact["email"]}</a>')
+    if contact.get('phone'):
+        contact_parts.append(contact['phone'])
+    if contact.get('linkedin'):
+        linkedin = contact['linkedin']
+        display = linkedin.replace('https://', '').replace('http://', '')
+        contact_parts.append(f'<a href="{linkedin}" color="blue">{display}</a>')
+    if contact.get('github'):
+        github = contact['github']
+        display = github.replace('https://', '').replace('http://', '')
+        contact_parts.append(f'<a href="{github}" color="blue">{display}</a>')
+    if contact.get('location'):
+        contact_parts.append(contact['location'])
+    if contact_parts:
+        elements.append(Paragraph(' | '.join(contact_parts), styles['contact']))
+
+    # Education
+    if resume_data.get('education'):
+        elements.append(Paragraph('EDUCATION', styles['section']))
+        elements.append(HRFlowable(width="100%", thickness=1, color=black, spaceBefore=0, spaceAfter=6))
+        for edu in resume_data['education']:
+            inst_para = Paragraph(f"<b>{edu.get('institution', '')}</b>", styles['normal'])
+            grad_para = Paragraph(f"<b>{edu.get('graduation', '')}</b>", styles['normal'])
+            t = Table([[inst_para, grad_para]], colWidths=['75%', '25%'])
+            t.setStyle(TableStyle([('ALIGN', (0, 0), (0, 0), 'LEFT'), ('ALIGN', (1, 0), (1, 0), 'RIGHT'),
+                                   ('VALIGN', (0, 0), (-1, -1), 'TOP'), ('TOPPADDING', (0, 0), (-1, -1), 0),
+                                   ('BOTTOMPADDING', (0, 0), (-1, -1), 0)]))
+            elements.append(t)
+            if edu.get('degree'):
+                elements.append(Paragraph(edu['degree'], styles['normal']))
+            if edu.get('gpa'):
+                elements.append(Paragraph(f"• <b>GPA:</b> {edu['gpa']}", styles['bullet']))
+            if edu.get('relevant_coursework'):
+                elements.append(Paragraph(f"• <b>Relevant Coursework:</b> {edu['relevant_coursework']}", styles['bullet']))
+            elements.append(Spacer(1, 4))
+
+    # Experience
+    if resume_data.get('experience'):
+        elements.append(Paragraph('EXPERIENCE', styles['section']))
+        elements.append(HRFlowable(width="100%", thickness=1, color=black, spaceBefore=0, spaceAfter=6))
+        for exp in resume_data['experience']:
+            comp_para = Paragraph(f"<b>{exp.get('company', '')}</b>", styles['normal'])
+            loc_para = Paragraph(exp.get('location', ''), styles['normal'])
+            t = Table([[comp_para, loc_para]], colWidths=['75%', '25%'])
+            t.setStyle(TableStyle([('ALIGN', (0, 0), (0, 0), 'LEFT'), ('ALIGN', (1, 0), (1, 0), 'RIGHT'),
+                                   ('VALIGN', (0, 0), (-1, -1), 'TOP'), ('TOPPADDING', (0, 0), (-1, -1), 0),
+                                   ('BOTTOMPADDING', (0, 0), (-1, -1), 0)]))
+            elements.append(t)
+            title_para = Paragraph(f"<i>{exp.get('title', '')}</i>", styles['normal'])
+            dur_para = Paragraph(exp.get('duration', ''), styles['normal'])
+            t2 = Table([[title_para, dur_para]], colWidths=['75%', '25%'])
+            t2.setStyle(TableStyle([('ALIGN', (0, 0), (0, 0), 'LEFT'), ('ALIGN', (1, 0), (1, 0), 'RIGHT'),
+                                    ('VALIGN', (0, 0), (-1, -1), 'TOP'), ('TOPPADDING', (0, 0), (-1, -1), 0),
+                                    ('BOTTOMPADDING', (0, 0), (-1, -1), 0)]))
+            elements.append(t2)
+            for bullet in exp.get('bullets', []):
+                elements.append(Paragraph(f"• {process_bold_markers(bullet)}", styles['bullet']))
+            elements.append(Spacer(1, 4))
+
+    # Projects
+    if resume_data.get('projects'):
+        elements.append(Paragraph('PROJECTS', styles['section']))
+        elements.append(HRFlowable(width="100%", thickness=1, color=black, spaceBefore=0, spaceAfter=6))
+        for proj in resume_data['projects']:
+            name_para = Paragraph(f"<b>{proj.get('name', '')}</b>", styles['normal'])
+            loc_para = Paragraph(proj.get('location', ''), styles['normal'])
+            t = Table([[name_para, loc_para]], colWidths=['75%', '25%'])
+            t.setStyle(TableStyle([('ALIGN', (0, 0), (0, 0), 'LEFT'), ('ALIGN', (1, 0), (1, 0), 'RIGHT'),
+                                   ('VALIGN', (0, 0), (-1, -1), 'TOP'), ('TOPPADDING', (0, 0), (-1, -1), 0),
+                                   ('BOTTOMPADDING', (0, 0), (-1, -1), 0)]))
+            elements.append(t)
+            if proj.get('technologies') or proj.get('duration'):
+                tech_para = Paragraph(f"<i>{proj.get('technologies', '')}</i>", styles['normal'])
+                dur_para = Paragraph(proj.get('duration', ''), styles['normal'])
+                t2 = Table([[tech_para, dur_para]], colWidths=['75%', '25%'])
+                t2.setStyle(TableStyle([('ALIGN', (0, 0), (0, 0), 'LEFT'), ('ALIGN', (1, 0), (1, 0), 'RIGHT'),
+                                        ('VALIGN', (0, 0), (-1, -1), 'TOP'), ('TOPPADDING', (0, 0), (-1, -1), 0),
+                                        ('BOTTOMPADDING', (0, 0), (-1, -1), 0)]))
+                elements.append(t2)
+            for bullet in proj.get('bullets', []):
+                elements.append(Paragraph(f"• {process_bold_markers(bullet)}", styles['bullet']))
+            elements.append(Spacer(1, 4))
+
+    # Skills
+    if resume_data.get('skills'):
+        elements.append(Paragraph('SKILLS', styles['section']))
+        elements.append(HRFlowable(width="100%", thickness=1, color=black, spaceBefore=0, spaceAfter=6))
+        skills = resume_data['skills']
+        if skills.get('technical'):
+            elements.append(Paragraph(f"• <b>Technical:</b> {', '.join(skills['technical'])}", styles['bullet']))
+        if skills.get('tools'):
+            elements.append(Paragraph(f"• <b>Tools &amp; Frameworks:</b> {', '.join(skills['tools'])}", styles['bullet']))
+        if skills.get('programming_languages'):
+            elements.append(Paragraph(f"• <b>Programming Languages:</b> {', '.join(skills['programming_languages'])}", styles['bullet']))
+        elements.append(Spacer(1, 4))
+
+    # Certifications
+    if resume_data.get('certifications'):
+        elements.append(Paragraph('CERTIFICATIONS', styles['section']))
+        elements.append(HRFlowable(width="100%", thickness=1, color=black, spaceBefore=0, spaceAfter=6))
+        for cert in resume_data['certifications']:
+            elements.append(Paragraph(f"• {cert}", styles['bullet']))
+        elements.append(Spacer(1, 4))
+
+    doc.build(elements)
+    return buffer.getvalue()
+
+
+# ============== API HELPER FUNCTIONS ==============
 
 def parse_multipart(content_type: str, body: bytes) -> dict:
     """
@@ -176,6 +348,14 @@ def tailor_resume(client: anthropic.Anthropic, resume_text: str, job_description
     """
     prompt = f"""You are an expert resume writer and ATS optimization specialist. Your task is to tailor a resume for a specific job application.
 
+CRITICAL RULE - ABSOLUTE TRUTH REQUIREMENT:
+You must ONLY use information that exists in the original resume below. DO NOT FABRICATE, INVENT, OR MAKE UP any information whatsoever. This includes:
+- Do NOT invent job titles, companies, dates, or experiences
+- Do NOT fabricate skills, technologies, or certifications the person doesn't have
+- Do NOT make up metrics, numbers, or achievements
+- Do NOT add education, degrees, or coursework not in the original
+- If information is missing from the original resume, leave it out - DO NOT GUESS
+
 ORIGINAL RESUME:
 {resume_text}
 
@@ -190,18 +370,18 @@ TASK:
 Analyze the job description and tailor the resume to be ATS-optimized for this specific position. Follow these guidelines:
 
 1. **NO PROFESSIONAL SUMMARY**: Do not include a professional summary section. Incorporate keywords naturally into experience and project bullet points instead.
-2. **Keyword Integration**: Identify key skills, technologies, and requirements from the job description and weave them naturally into bullet points
+2. **Keyword Integration**: Identify key skills, technologies, and requirements from the job description and weave them naturally into bullet points - BUT ONLY if those skills actually exist in the original resume
 3. **Strategic Bolding**: Mark items to be bolded by wrapping them in **bold markers**. Bold the following:
-   - Technologies and tools (e.g., **Python**, **React**, **AWS**)
+   - Technologies and tools (e.g., **Python**, **React**, **AWS**) - only ones actually mentioned in original resume
    - Programming languages from tech stack
    - Frameworks and libraries
-   - Key performance indicators and metrics (e.g., **50% improvement**, **$2M revenue**, **10,000 users**)
+   - Key performance indicators and metrics (e.g., **50% improvement**, **$2M revenue**, **10,000 users**) - only real numbers from original
    - Important achievements that should pop to hiring managers
    - Quantifiable results and impact numbers
 4. **Relevance**: Emphasize experiences and skills most relevant to this position
 5. **ATS-Friendly**: Use standard section headings and formatting
-6. **Achievements**: Quantify achievements where possible
-7. **Keep it truthful**: Only include information that was in the original resume - do not fabricate experience
+6. **Achievements**: Quantify achievements where possible - USE ONLY REAL NUMBERS FROM THE ORIGINAL RESUME
+7. **ABSOLUTELY NO FABRICATION**: You must ONLY include information that was explicitly stated in the original resume. Do NOT invent, fabricate, or make up ANY information. If something isn't in the original resume, DO NOT ADD IT. This is critically important - lying on a resume is illegal and unethical.
 
 Return ONLY a JSON object with the following structure (no markdown, no code blocks):
 
@@ -258,7 +438,9 @@ Return ONLY a JSON object with the following structure (no markdown, no code blo
   "keywords_added": ["keyword1", "keyword2", "keyword3"]
 }}
 
-IMPORTANT: Wrap items to be bolded with **double asterisks** in the bullet points. Include all relevant sections that exist in the original resume. Focus on making this resume highly tailored to the {job_title} position at {company_name}."""
+IMPORTANT: Wrap items to be bolded with **double asterisks** in the bullet points. Include all relevant sections that exist in the original resume. Focus on making this resume highly tailored to the {job_title} position at {company_name}.
+
+FINAL REMINDER: DO NOT FABRICATE ANYTHING. Every single piece of information in your response MUST come directly from the original resume provided above. If you cannot find specific information in the original resume, DO NOT include it. Accuracy and truthfulness are more important than completeness."""
 
     response = client.messages.create(
         model="claude-sonnet-4-5-20250929",
