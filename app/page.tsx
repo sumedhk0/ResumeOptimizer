@@ -61,8 +61,22 @@ export default function Home() {
       clearTimeout(progressTimeout3);
 
       if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || "Failed to generate resume");
+        // Try to parse JSON error, but handle non-JSON responses
+        let errorMessage = "Failed to generate resume";
+        try {
+          const text = await response.text();
+          // Check if it's JSON
+          if (text.startsWith("{")) {
+            const errorData = JSON.parse(text);
+            errorMessage = errorData.error || errorMessage;
+          } else {
+            // Non-JSON error (e.g., HTML error page)
+            errorMessage = `Server error (${response.status}): ${response.statusText}`;
+          }
+        } catch {
+          errorMessage = `Server error (${response.status}): ${response.statusText}`;
+        }
+        throw new Error(errorMessage);
       }
 
       // Get keywords from header

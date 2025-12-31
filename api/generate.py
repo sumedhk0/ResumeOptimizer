@@ -9,13 +9,18 @@ Vercel Python serverless function that:
 """
 
 import os
+import sys
 import re
 import json
 from io import BytesIO
 from http.server import BaseHTTPRequestHandler
+
+# Add parent directory to path for lib imports
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import anthropic
 from PyPDF2 import PdfReader
-from pdf_generator import generate_pdf_resume
+from lib.pdf_generator import generate_pdf_resume
 
 
 def parse_multipart(content_type: str, body: bytes) -> dict:
