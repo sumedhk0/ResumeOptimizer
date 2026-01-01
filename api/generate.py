@@ -3,7 +3,7 @@ Resume Generation API Endpoint
 
 Vercel Python serverless function that:
 1. Accepts a PDF resume and job description
-2. Uses Claude AI to tailor the resume
+2. Uses OpenRouter API (Xiaomi MiMo v2 Flash) to tailor the resume
 3. Generates a PDF using ReportLab
 4. Returns the tailored PDF
 """
@@ -14,7 +14,7 @@ import json
 from io import BytesIO
 from http.server import BaseHTTPRequestHandler
 
-import anthropic
+from openai import OpenAI
 from PyPDF2 import PdfReader
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
@@ -288,12 +288,12 @@ def extract_text_from_pdf(pdf_bytes: bytes) -> str:
         raise ValueError(f"Failed to extract PDF text: {str(e)}")
 
 
-def extract_job_details(client: anthropic.Anthropic, job_description: str) -> tuple:
+def extract_job_details(client: OpenAI, job_description: str) -> tuple:
     """
-    Use Claude API to extract company name and job title from job description.
+    Use OpenRouter API to extract company name and job title from job description.
 
     Args:
-        client: Anthropic client
+        client: OpenAI client configured for OpenRouter
         job_description: Full job description text
 
     Returns:
@@ -312,13 +312,13 @@ Return ONLY a JSON object with this exact structure (no markdown, no code blocks
 
 If you cannot find the company name or job title, use "Unknown Company" or "Unknown Position" respectively."""
 
-    response = client.messages.create(
-        model="claude-sonnet-4-5-20250929",
+    response = client.chat.completions.create(
+        model="xiaomi/mimo-vl-2-flash",
         max_tokens=500,
         messages=[{"role": "user", "content": prompt}]
     )
 
-    response_text = response.content[0].text.strip()
+    response_text = response.choices[0].message.content.strip()
 
     # Remove markdown code blocks if present
     if response_text.startswith("```"):
@@ -331,13 +331,13 @@ If you cannot find the company name or job title, use "Unknown Company" or "Unkn
     return data.get('company_name', 'Unknown Company'), data.get('job_title', 'Unknown Position')
 
 
-def tailor_resume(client: anthropic.Anthropic, resume_text: str, job_description: str,
+def tailor_resume(client: OpenAI, resume_text: str, job_description: str,
                   company_name: str, job_title: str) -> dict:
     """
-    Use Claude API to tailor resume content for a specific job.
+    Use OpenRouter API to tailor resume content for a specific job.
 
     Args:
-        client: Anthropic client
+        client: OpenAI client configured for OpenRouter
         resume_text: Original resume text
         job_description: Job description
         company_name: Company name
@@ -442,13 +442,13 @@ IMPORTANT: Wrap items to be bolded with **double asterisks** in the bullet point
 
 FINAL REMINDER: DO NOT FABRICATE ANYTHING. Every single piece of information in your response MUST come directly from the original resume provided above. If you cannot find specific information in the original resume, DO NOT include it. Accuracy and truthfulness are more important than completeness."""
 
-    response = client.messages.create(
-        model="claude-sonnet-4-5-20250929",
+    response = client.chat.completions.create(
+        model="xiaomi/mimo-vl-2-flash",
         max_tokens=4000,
         messages=[{"role": "user", "content": prompt}]
     )
 
-    response_text = response.content[0].text.strip()
+    response_text = response.choices[0].message.content.strip()
 
     # Remove markdown code blocks if present
     if response_text.startswith("```"):
@@ -467,9 +467,9 @@ class handler(BaseHTTPRequestHandler):
         """Handle POST requests for resume generation."""
         try:
             # Get API key from environment
-            api_key = os.environ.get('ANTHROPIC_API_KEY')
+            api_key = os.environ.get('OPENROUTER_API_KEY')
             if not api_key:
-                self.send_error_response(500, "ANTHROPIC_API_KEY not configured")
+                self.send_error_response(500, "OPENROUTER_API_KEY not configured")
                 return
 
             # Read request body
@@ -508,8 +508,11 @@ class handler(BaseHTTPRequestHandler):
                 self.send_error_response(400, "Could not extract text from resume PDF")
                 return
 
-            # Initialize Anthropic client
-            client = anthropic.Anthropic(api_key=api_key)
+            # Initialize OpenRouter client (OpenAI-compatible)
+            client = OpenAI(
+                base_url="https://openrouter.ai/api/v1",
+                api_key=api_key
+            )
 
             # Extract job details if not provided
             if not company_name or not job_title:
@@ -519,7 +522,7 @@ class handler(BaseHTTPRequestHandler):
                 if not job_title:
                     job_title = extracted_title
 
-            # Tailor resume using Claude
+            # Tailor resume using OpenRouter
             tailored_data = tailor_resume(
                 client, resume_text, job_description, company_name, job_title
             )
@@ -543,10 +546,8 @@ class handler(BaseHTTPRequestHandler):
 
         except json.JSONDecodeError as e:
             self.send_error_response(500, f"Failed to parse AI response: {str(e)}")
-        except anthropic.APIError as e:
-            self.send_error_response(500, f"AI API error: {str(e)}")
         except Exception as e:
-            self.send_error_response(500, f"Internal error: {str(e)}")
+            self.send_error_response(500, f"Error: {str(e)}")
 
     def send_error_response(self, status_code: int, message: str):
         """Send a JSON error response."""
