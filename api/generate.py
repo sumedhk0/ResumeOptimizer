@@ -313,7 +313,7 @@ Return ONLY a JSON object with this exact structure (no markdown, no code blocks
 If you cannot find the company name or job title, use "Unknown Company" or "Unknown Position" respectively."""
 
     response = client.chat.completions.create(
-        model="xiaomi/mimo-vl-2-flash",
+        model="xiaomi/mimo-v2-flash:free",
         max_tokens=500,
         messages=[{"role": "user", "content": prompt}]
     )
@@ -443,7 +443,7 @@ IMPORTANT: Wrap items to be bolded with **double asterisks** in the bullet point
 FINAL REMINDER: DO NOT FABRICATE ANYTHING. Every single piece of information in your response MUST come directly from the original resume provided above. If you cannot find specific information in the original resume, DO NOT include it. Accuracy and truthfulness are more important than completeness."""
 
     response = client.chat.completions.create(
-        model="xiaomi/mimo-vl-2-flash",
+        model="xiaomi/mimo-v2-flash:free",
         max_tokens=4000,
         messages=[{"role": "user", "content": prompt}]
     )
