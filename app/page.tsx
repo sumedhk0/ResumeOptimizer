@@ -50,7 +50,7 @@ export default function Home() {
       const progressTimeout2 = setTimeout(() => setCurrentStep("tailoring"), 5000);
       const progressTimeout3 = setTimeout(() => setCurrentStep("generating"), 15000);
 
-      const response = await fetch("/api/generate", {
+      const response = await fetch("/.netlify/functions/generate", {
         method: "POST",
         body: formData,
       });
